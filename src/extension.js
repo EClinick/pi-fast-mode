@@ -19,15 +19,22 @@ export default function fastMode(pi) {
   const status = (ctx) => `Fast request ${enabled ? "on" : "off"}${supported(ctx.model) ? "" : " (unsupported model)"}; ` +
     (last ? `last requested: ${last.requested}; confirmed: ${last.confirmed}${last.error ? " (request failed/aborted)" : ""}` :
       "requested: none yet; confirmed: unknown");
-  const render = (ctx) => {
+  let confirmationTimer;
+  let confirmationUI;
+  const dismissConfirmation = () => {
+    clearTimeout(confirmationTimer);
+    confirmationTimer = undefined;
+    confirmationUI?.setStatus("pi-fast-mode", undefined);
+    confirmationUI = undefined;
+  };
+  const confirmPreference = (ctx) => {
     if (ctx.mode !== "tui") return;
-    // Use Pi's shared status slot: never replace its model/effort/usage footer.
-    // Theme-native emphasis inherits terminal colors, including live appearance
-    // changes. Never cache theme colors in this string-only API.
-    const detail = !supported(ctx.model) ? "unsupported" : last?.error ? "error" :
-      enabled && last ? (last.confirmed === "unknown" ? "?" : last.confirmed) : undefined;
-    const label = enabled ? ctx.ui.theme.bold("Fast req on") : "Fast req off";
-    ctx.ui.setStatus("pi-fast-mode", `${label}${detail ? ` · ${detail}` : ""}`);
+    dismissConfirmation();
+    confirmationUI = ctx.ui;
+    // Brief acknowledgment only: never replace Pi's footer or other status keys.
+    ctx.ui.setStatus("pi-fast-mode", `Fast ${enabled ? "on" : "off"}${supported(ctx.model) ? "" : " (unsupported)"}`);
+    confirmationTimer = setTimeout(dismissConfirmation, 2000);
+    confirmationTimer.unref?.();
   };
   const restore = (_event, ctx) => {
     enabled = false;
@@ -37,11 +44,14 @@ export default function fastMode(pi) {
       }
     }
     last = undefined;
-    render(ctx);
+    dismissConfirmation();
+    // Also clear a status left by an older version during reload.
+    if (ctx.mode === "tui") ctx.ui.setStatus("pi-fast-mode", undefined);
   };
   pi.on("session_start", restore);
   pi.on("session_tree", restore);
-  pi.on("model_select", (_event, ctx) => { last = undefined; render(ctx); });
+  pi.on("session_shutdown", dismissConfirmation);
+  pi.on("model_select", () => { last = undefined; dismissConfirmation(); });
 
   pi.registerCommand("fast", {
     description: "Toggle Astra priority requests: /fast [on|off|status] (may cost more; session preference)",
@@ -57,8 +67,8 @@ export default function fastMode(pi) {
         // Persist first: a failed append must not silently enable a costly preference.
         pi.appendEntry(ENTRY, { enabled: next });
         enabled = next;
+        confirmPreference(ctx);
       }
-      render(ctx);
       if (!ctx.hasUI) return;
       if (action === "status") {
         ctx.ui.notify(status(ctx) + ". On requests priority; it does not guarantee fast service or a speedup. Priority may cost more.", "info");
@@ -75,45 +85,39 @@ export default function fastMode(pi) {
     // The request hook has no model argument. Check BOTH the context and wire model.
     last = undefined;
     if (!supported(ctx.model) || !record(event.payload) || event.payload.model !== MODEL) {
-      render(ctx);
       return;
     }
     last = { requested: enabled ? "priority" :
       (event.payload.service_tier === undefined ? "unspecified" : tier(event.payload.service_tier)),
       confirmed: "unknown", error: false,
       provider: ctx.model.provider, api: ctx.model.api };
-    render(ctx);
     if (enabled) return { ...event.payload, service_tier: "priority" };
     // Off does not remove another extension's/provider's tier choice.
   });
 
-  pi.on("provider_stream_event", (event, ctx) => {
+  pi.on("provider_stream_event", (event) => {
     if (!last || event.provider !== last.provider || event.api !== last.api || event.model !== MODEL) return;
     const data = event.data;
     if (!record(data)) return;
     // response.created/in_progress often echo 'auto', not the tier actually used.
     if (data.type === "response.completed") {
       last.confirmed = tier(data.response?.service_tier);
-      render(ctx);
-      // Routine tier evidence belongs in the badge and /fast status, not the transcript.
+      // Routine tier evidence belongs only in /fast status, not the transcript.
     } else if (["error", "response.failed", "response.incomplete"].includes(data.type)) {
       last.confirmed = "unknown";
       last.error = true;
-      render(ctx);
     }
   });
-  pi.on("after_provider_response", (event, ctx) => {
+  pi.on("after_provider_response", (event) => {
     if (last && event.status >= 400) {
       last.confirmed = "unknown";
       last.error = true;
-      render(ctx);
     }
   });
-  pi.on("message_end", (event, ctx) => {
+  pi.on("message_end", (event) => {
     if (last && event.message.role === "assistant" && ["error", "aborted"].includes(event.message.stopReason)) {
       last.confirmed = "unknown";
       last.error = true;
-      render(ctx);
     }
   });
 }
