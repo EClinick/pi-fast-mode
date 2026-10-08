@@ -21,12 +21,15 @@ function harness(branch = [], options = {}) {
   const ctx = {
     model: { ...selectedModel }, mode: "tui", hasUI: true,
     sessionManager: { getBranch: () => branch },
-    ui: { setStatus: (_key, value) => { display = value; }, notify: (value) => notices.push(value) },
+    ui: { theme: { bold: (text) => `\x1b[1m${text}\x1b[22m` },
+      setStatus: (_key, value) => { display = value; }, notify: (value) => notices.push(value) },
   };
   fastMode(pi);
   const emit = (name, event = {}) => handlers.get(name)(event, ctx);
   emit("session_start");
-  return { ctx, branch, notices, emit, command: (args) => command(args, ctx), status: () => display,
+  return { ctx, branch, notices, emit, command: (args) => command(args, ctx),
+    rawBadge: () => display, badge: () => display.replace(/\x1b\[[0-9;]*m/g, ""),
+    status: () => { command("status", ctx); return notices.at(-1); },
     request: (body = payload) => emit("before_provider_request", { payload: body }),
     response: (data, extra = {}) => emit("provider_stream_event", { provider: selectedModel.provider, api: selectedModel.api, model: selectedModel.id, data, ...extra }),
   };
@@ -120,10 +123,9 @@ test("preference persists on resume/reload, honors branch, and new sessions defa
   assert.match(h.status(), /Fast request off/);
 });
 
-test("status and bare command report without changing preference or saving", async () => {
+test("status reports without changing preference or saving", async () => {
   const h = harness();
   await h.command("status");
-  await h.command("");
   assert.equal(h.branch.length, 0);
   assert.match(h.notices.at(-1), /Fast request off.*confirmed: unknown/);
   await h.command("on");
@@ -181,19 +183,19 @@ test("request retry, model change and errors cannot retain stale priority confir
   assert.match(h.status(), /none yet/);
 });
 
-test("live regression: requested priority / returned default warns, rather than claiming fast is on", async () => {
+test("live regression: repeated default/unknown tiers update badge without transcript spam", async () => {
   const h = harness();
   await h.command("on");
-  assert.match(h.status(), /Fast request on/);
-  for (const value of ["default", undefined, "flex"]) {
+  assert.equal(h.badge(), "Fast req on");
+  for (const value of ["default", undefined, "flex", "default", undefined]) {
     h.request();
     const count = h.notices.length;
     h.response({ type: "response.created", response: { service_tier: "auto" } });
     assert.equal(h.notices.length, count);
     h.response({ type: "response.completed", response: { service_tier: value } });
-    assert.match(h.notices.at(-1), /Fast service not confirmed/);
+    assert.equal(h.badge(), `Fast req on · ${value ?? "?"}`);
     h.response({ type: "response.completed", response: { service_tier: value } });
-    assert.equal(h.notices.length, count + 1);
+    assert.equal(h.notices.length, count);
   }
   for (const value of ["priority", "fast"]) {
     h.request();
@@ -206,6 +208,88 @@ test("live regression: requested priority / returned default warns, rather than 
   const count = h.notices.length;
   h.response({ type: "response.completed", response: { service_tier: "default" } });
   assert.equal(h.notices.length, count);
+});
+
+test("bare /fast toggles and saves each preference, including whitespace and resumed sessions", async () => {
+  const h = harness();
+  assert.equal(h.badge(), "Fast req off");
+  assert.equal(h.rawBadge(), "Fast req off");
+  await h.command("");
+  assert.equal(h.badge(), "Fast req on");
+  assert.equal(h.rawBadge(), "\x1b[1mFast req on\x1b[22m");
+  assert.equal(h.request().service_tier, "priority");
+  assert.deepEqual(h.branch.map((entry) => entry.data.enabled), [true]);
+  const resumed = harness(h.branch);
+  await resumed.command("  ");
+  assert.equal(resumed.badge(), "Fast req off");
+  assert.equal(resumed.request(), undefined);
+  assert.deepEqual(h.branch.map((entry) => entry.data.enabled), [true, false]);
+  h.emit("session_tree");
+  assert.equal(h.badge(), "Fast req off");
+  await h.command("");
+  assert.equal(h.branch.at(-1).data.enabled, true);
+});
+
+test("failed toggle save preserves both on and off state and badge", async () => {
+  for (const enabled of [false, true]) {
+    const branch = [{ type: "custom", customType: "pi-fast-mode/preference-v1", data: { enabled } }];
+    const h = harness(branch, { failSave: true });
+    await assert.rejects(h.command(""), /disk full/);
+    assert.equal(h.badge(), `Fast req ${enabled ? "on" : "off"}`);
+    assert.equal(h.request()?.service_tier, enabled ? "priority" : undefined);
+    assert.equal(branch.length, 1);
+    assert.equal(h.notices.length, 0);
+  }
+});
+
+test("compact status distinguishes unsupported, errors, unknown and final tiers without notifications", async () => {
+  const h = harness();
+  await h.command("");
+  const count = h.notices.length;
+  await h.command("on"); // idempotent command does not repeat cost disclosure
+  assert.equal(h.notices.length, count);
+  h.request();
+  assert.equal(h.badge(), "Fast req on · ?");
+  h.response({ type: "response.completed", response: { service_tier: "priority" } });
+  assert.equal(h.badge(), "Fast req on · priority");
+  h.emit("message_end", { message: { role: "assistant", stopReason: "aborted" } });
+  assert.equal(h.badge(), "Fast req on · error");
+  h.ctx.model = { ...model, id: "other" };
+  h.emit("model_select");
+  assert.equal(h.badge(), "Fast req on · unsupported");
+  assert.equal(h.request(), undefined);
+  h.ctx.model = model;
+  h.emit("model_select");
+  assert.equal(h.badge(), "Fast req on");
+  assert.equal(h.notices.length, count);
+  assert.doesNotMatch(h.badge(), /confirmed|requested:|\x1b/);
+});
+
+test("changing preference does not rewrite in-flight evidence; explicit status explains it", async () => {
+  const h = harness();
+  await h.command("");
+  h.request();
+  await h.command("");
+  h.response({ type: "response.completed", response: { service_tier: "default" } });
+  assert.equal(h.badge(), "Fast req off");
+  await h.command("status");
+  assert.match(h.notices.at(-1), /Fast request off; last requested: priority; confirmed: default/);
+  assert.match(h.notices.at(-1), /does not guarantee/);
+  assert.equal(h.branch.length, 2);
+});
+
+test("RPC commands report preference without calling terminal APIs or spamming responses", async () => {
+  const h = harness();
+  h.ctx.mode = "rpc";
+  h.ctx.ui.setStatus = () => { throw new Error("terminal API in RPC"); };
+  await h.command("");
+  assert.match(h.notices.at(-1), /may cost more/);
+  h.request();
+  const count = h.notices.length;
+  h.response({ type: "response.completed", response: { service_tier: "default" } });
+  assert.equal(h.notices.length, count);
+  await h.command("");
+  assert.equal(h.notices.at(-1), "Fast request off.");
 });
 
 test("headless mode mutates requests without terminal output", async () => {

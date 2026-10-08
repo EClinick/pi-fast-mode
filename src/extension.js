@@ -20,7 +20,14 @@ export default function fastMode(pi) {
     (last ? `last requested: ${last.requested}; confirmed: ${last.confirmed}${last.error ? " (request failed/aborted)" : ""}` :
       "requested: none yet; confirmed: unknown");
   const render = (ctx) => {
-    if (ctx.mode === "tui") ctx.ui.setStatus("pi-fast-mode", status(ctx));
+    if (ctx.mode !== "tui") return;
+    // Use Pi's shared status slot: never replace its model/effort/usage footer.
+    // Theme-native emphasis inherits terminal colors, including live appearance
+    // changes. Never cache theme colors in this string-only API.
+    const detail = !supported(ctx.model) ? "unsupported" : last?.error ? "error" :
+      enabled && last ? (last.confirmed === "unknown" ? "?" : last.confirmed) : undefined;
+    const label = enabled ? ctx.ui.theme.bold("Fast req on") : "Fast req off";
+    ctx.ui.setStatus("pi-fast-mode", `${label}${detail ? ` · ${detail}` : ""}`);
   };
   const restore = (_event, ctx) => {
     enabled = false;
@@ -37,13 +44,14 @@ export default function fastMode(pi) {
   pi.on("model_select", (_event, ctx) => { last = undefined; render(ctx); });
 
   pi.registerCommand("fast", {
-    description: "Astra priority requests: /fast on|off|status (may cost more; saved in this session)",
+    description: "Toggle Astra priority requests: /fast [on|off|status] (may cost more; session preference)",
     handler: async (args, ctx) => {
-      const action = args.trim() || "status";
+      const action = args.trim() || (enabled ? "off" : "on");
       if (!["on", "off", "status"].includes(action)) {
-        if (ctx.hasUI) ctx.ui.notify("Usage: /fast on|off|status", "warning");
+        if (ctx.hasUI) ctx.ui.notify("Usage: /fast [on|off|status] (bare /fast toggles)", "warning");
         return;
       }
+      const enabling = action === "on" && !enabled;
       if (action !== "status") {
         const next = action === "on";
         // Persist first: a failed append must not silently enable a costly preference.
@@ -51,8 +59,15 @@ export default function fastMode(pi) {
         enabled = next;
       }
       render(ctx);
-      if (ctx.hasUI) ctx.ui.notify(status(ctx) + (action === "on" ?
-        ". Priority may cost more and is not guaranteed. Applies to subsequent supported requests." : ""), "info");
+      if (!ctx.hasUI) return;
+      if (action === "status") {
+        ctx.ui.notify(status(ctx) + ". On requests priority; it does not guarantee fast service or a speedup. Priority may cost more.", "info");
+      } else if (enabling) {
+        ctx.ui.notify("Priority requests enabled; may cost more. Fast service is not guaranteed." +
+          (supported(ctx.model) ? "" : " Current model unsupported; requests unchanged."), "warning");
+      } else if (ctx.mode !== "tui") {
+        ctx.ui.notify(`Fast request ${enabled ? "on" : "off"}${supported(ctx.model) ? "" : " (unsupported model)"}.`, "info");
+      }
     },
   });
 
@@ -65,7 +80,7 @@ export default function fastMode(pi) {
     }
     last = { requested: enabled ? "priority" :
       (event.payload.service_tier === undefined ? "unspecified" : tier(event.payload.service_tier)),
-      confirmed: "unknown", error: false, warnIfUnconfirmed: enabled, warned: false,
+      confirmed: "unknown", error: false,
       provider: ctx.model.provider, api: ctx.model.api };
     render(ctx);
     if (enabled) return { ...event.payload, service_tier: "priority" };
@@ -80,12 +95,7 @@ export default function fastMode(pi) {
     if (data.type === "response.completed") {
       last.confirmed = tier(data.response?.service_tier);
       render(ctx);
-      if (last.warnIfUnconfirmed && !last.warned && !["priority", "fast"].includes(last.confirmed)) {
-        last.warned = true;
-        if (ctx.hasUI) ctx.ui.notify(
-          `Fast service not confirmed: requested priority; provider returned ${last.confirmed}. ` +
-          "The on preference is only a request, not proof of fast service. See /fast status.", "warning");
-      }
+      // Routine tier evidence belongs in the badge and /fast status, not the transcript.
     } else if (["error", "response.failed", "response.incomplete"].includes(data.type)) {
       last.confirmed = "unknown";
       last.error = true;

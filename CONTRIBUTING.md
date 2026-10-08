@@ -19,7 +19,7 @@ To try the extension interactively, install Pi 1.0.0 or later (`@earendil-works/
 pi -e ./src/extension.js
 ```
 
-Use `/fast status`, `/fast on`, and `/fast off`. Start a new Pi invocation after editing the extension, or use `/reload`. The preference is stored in the current session branch; new sessions default off. Consult [README.md](README.md) for exact supported model/provider/endpoint combinations, package installation, and updates.
+Use `/fast` to toggle; `/fast status`, `/fast on`, and `/fast off` remain available. Start a new Pi invocation after editing the extension, or use `/reload`. The preference is stored in the current session branch; new sessions default off. Consult [README.md](README.md) for exact supported model/provider/endpoint combinations, package installation, and updates.
 
 ## Changes and validation
 

@@ -2,7 +2,7 @@
 
 An opt-in [Pi](https://pi.dev) extension that requests fast/priority service for **GPT-6 Astra** and shows what service tier the provider actually reports.
 
-- `/fast on`, `/fast off`, and `/fast status`
+- `/fast` toggles on/off; `/fast on`, `/fast off`, and `/fast status` remain available
 - Off by default, with a preference saved in the current session branch
 - Separate **requested** and **provider-confirmed** tiers
 - Standalone Git package: no Firstmate dependency, background service, or build step
@@ -23,11 +23,10 @@ Run on each computer:
 pi install git:github.com/EClinick/pi-fast-mode
 ```
 
-Start/restart Pi, or run `/reload` in an already-running session. Select a supported Astra model, then enable requests explicitly:
+Start/restart Pi, or run `/reload` in an already-running session. Select a supported Astra model, then toggle requests on:
 
 ```text
-/fast status
-/fast on
+/fast
 ```
 
 Your next supported model request will include `service_tier: "priority"`. Installing the package does **not** enable it automatically.
@@ -39,11 +38,26 @@ Your next supported model request will include `service_tier: "priority"`. Insta
 | `/fast on` | Request priority for subsequent supported requests; save the preference in this session branch. |
 | `/fast off` | Stop adding a tier to subsequent requests; save the preference. |
 | `/fast status` | Show the preference and last-request evidence without changing either. |
-| `/fast` | Shorthand for `/fast status`. |
+| `/fast` | Toggle the saved preference on/off. New sessions start off, so the first toggle enables requests. |
 
 Changing the preference does not alter an in-flight request. Off leaves the request untouched: it does not remove a tier chosen by another extension or provider configuration.
 
-### What the status means
+### Compact UI and detailed status
+
+Pi's shared extension-status row, immediately below the model/effort row, shows a compact badge:
+
+```text
+Fast req off
+Fast req on
+Fast req on · ?
+Fast req on · default
+```
+
+`req on` means **requests enabled**, never server-confirmed acceleration. The suffix is the last provider-reported tier, `?` for unknown evidence, `error` for a failed/aborted request, or `unsupported` when the current model is outside the supported routes. Off hides routine tier evidence, but errors and unsupported selections remain visible. Use `/fast status` for full evidence, including the last request made before a toggle.
+
+The badge uses Pi theme emphasis (bold when enabled) with native terminal colors, so it follows appearance changes without stale cached colors. Pi owns placement and narrow-width truncation alongside other extensions. There is no supported inline model-label slot: this extension does **not** replace the footer or editor, patch Pi, or displace built-in model, effort, usage, or other extension information.
+
+Detailed diagnostics are shown only when you run `/fast status`:
 
 ```text
 Fast request on; last requested: priority; confirmed: unknown
@@ -56,7 +70,7 @@ Fast request on; last requested: priority; confirmed: priority
 - **Confirmed** comes only from the final `response.completed.response.service_tier`. A final `priority` or `fast` confirms that reported tier, not a measured latency improvement. `default` is a reported tier different from the requested priority.
 - **Unknown** means no final tier evidence: the request may be in flight, the field may be missing/malformed, or the request may have failed/been aborted. Early response events that report `auto` do not count as final confirmation.
 
-A completed opted-in request without a final `priority`/`fast` tier produces a **“Fast service not confirmed”** warning. The extension does not silently retry a failed request without priority; Pi retains its normal error/retry behavior.
+Routine `default`/unknown results update the badge without per-response warnings. Enabling requests displays one concise cost/availability disclosure; repeated `/fast on` while already enabled does not repeat it. Unsupported models are marked in the badge (and in the enable notice). Errors remain visible through Pi's normal error UI, the badge, and `/fast status`. The extension does not silently retry a failed request without priority; Pi retains its normal error/retry behavior.
 
 ### Persistence
 
@@ -147,7 +161,15 @@ npm test
 git diff --check
 ```
 
-No dependency installation or build step is needed for the tests. They use Node's built-in runner and a fake Pi host; CI runs them on Node.js 22 and 24. Coverage includes provider/endpoint scoping, on/off/status, persistence, missing/different/priority/fast tiers, cross-provider isolation, error/abort handling, and headless behavior.
+No dependency installation or build step is needed for the tests. They use Node's built-in runner and a fake Pi host; CI runs them on Node.js 22 and 24. Coverage includes provider/endpoint scoping, bare toggles and explicit on/off/status, save failures, branch persistence, compact badges, quiet repeated responses, missing/different/priority/fast tiers, cross-provider isolation, error/abort handling, RPC, and headless behavior.
+
+An optional **offline** integration test loads the extension with installed Pi's real loader and exercises its native footer across dark/light/system themes and 12–120-column widths, including another extension's status. It sends no model requests:
+
+```sh
+PI_TEST_PACKAGE_DIR="$(npm root -g)/@earendil-works/pi-coding-agent" node --test test/pi-rendering.test.js
+```
+
+Without that environment variable, ordinary tests skip the installed-Pi check.
 
 To load a local checkout without adding a package declaration:
 
