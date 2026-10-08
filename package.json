@@ -1,0 +1,13 @@
+{
+  "name": "pi-fast-mode",
+  "version": "0.1.0",
+  "description": "Opt-in Astra priority requests with honest provider-tier reporting for Pi",
+  "type": "module",
+  "license": "MIT",
+  "repository": "github:EClinick/pi-fast-mode",
+  "keywords": ["pi-package", "pi-extension"],
+  "engines": { "node": ">=22" },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
+  "pi": { "extensions": ["./src/extension.js"] },
+  "scripts": { "test": "node --test" }
+}
