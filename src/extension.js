@@ -14,7 +14,7 @@ export function supported(model) {
 export default function fastMode(pi) {
   let enabled = false;
   let last;
-  const status = (ctx) => `Fast ${enabled ? "on" : "off"}${supported(ctx.model) ? "" : " (unsupported model)"}; ` +
+  const status = (ctx) => `Fast request ${enabled ? "on" : "off"}${supported(ctx.model) ? "" : " (unsupported model)"}; ` +
     (last ? `last requested: ${last.requested}; confirmed: ${last.confirmed}${last.error ? " (request failed/aborted)" : ""}` :
       "requested: none yet; confirmed: unknown");
   const render = (ctx) => {
@@ -63,7 +63,7 @@ export default function fastMode(pi) {
     }
     last = { requested: enabled ? "priority" :
       (event.payload.service_tier === undefined ? "unspecified" : tier(event.payload.service_tier)),
-      confirmed: "unknown", error: false };
+      confirmed: "unknown", error: false, warnIfUnconfirmed: enabled, warned: false };
     render(ctx);
     if (enabled) return { ...event.payload, service_tier: "priority" };
     // Off does not remove another extension's/provider's tier choice.
@@ -77,6 +77,12 @@ export default function fastMode(pi) {
     if (data.type === "response.completed") {
       last.confirmed = tier(data.response?.service_tier);
       render(ctx);
+      if (last.warnIfUnconfirmed && !last.warned && !["priority", "fast"].includes(last.confirmed)) {
+        last.warned = true;
+        if (ctx.hasUI) ctx.ui.notify(
+          `Fast service not confirmed: requested priority; provider returned ${last.confirmed}. ` +
+          "The on preference is only a request, not proof of fast service. See /fast status.", "warning");
+      }
     } else if (["error", "response.failed", "response.incomplete"].includes(data.type)) {
       last.confirmed = "unknown";
       last.error = true;

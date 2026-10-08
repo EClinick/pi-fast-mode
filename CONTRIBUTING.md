@@ -37,7 +37,7 @@ Use `/fast status`, `/fast on`, and `/fast off`. Start a new Pi invocation after
 
 Ordinary tests must remain credential-free and make no live requests. Any optional live probe requires account access and may incur charges; use minimal non-project input, a timeout and output bound, and no unnecessary retries. Report only non-sensitive compatibility evidence, not secrets or payloads.
 
-**Current live evidence:** an Astra request with `service_tier: "priority"` completed successfully, but the final provider tier was **`default`**. Actual fast/priority service has not been confirmed. Synthetic priority-response tests do not establish live priority availability; keep this limitation explicit in documentation and contribution claims.
+**Current live evidence:** the real Pi `/fast on` path delivers `service_tier: "priority"` over HTTP, but the final provider tier is **`default`**. Native Codex endpoint probes, including genuine WebSocket, also returned `default`; installed Codex serializes its `fast` preference as `priority`. Actual fast/priority service has not been confirmed. See [the diagnosis](docs/diagnosis.md) for the tested counterfactuals and optional live probe. Synthetic priority-response tests and a preference labeled on do not establish live priority availability; keep this limitation explicit in documentation and contribution claims.
 
 ## Pull requests and merging
 

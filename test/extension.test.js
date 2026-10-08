@@ -68,7 +68,7 @@ test("preference persists on resume/reload, honors branch, and new sessions defa
   assert.equal(harness(h.branch.slice(0, 1)).request().service_tier, "priority");
   assert.equal(harness().request(), undefined);
   h.emit("session_tree");
-  assert.match(h.status(), /Fast off/);
+  assert.match(h.status(), /Fast request off/);
 });
 
 test("status and bare command report without changing preference or saving", async () => {
@@ -76,7 +76,7 @@ test("status and bare command report without changing preference or saving", asy
   await h.command("status");
   await h.command("");
   assert.equal(h.branch.length, 0);
-  assert.match(h.notices.at(-1), /Fast off.*confirmed: unknown/);
+  assert.match(h.notices.at(-1), /Fast request off.*confirmed: unknown/);
   await h.command("on");
   h.request();
   h.emit("after_provider_response", { status: 200 });
@@ -97,7 +97,7 @@ test("save failure does not enable; invalid commands do not persist", async () =
 test("only terminal provider evidence confirms tier, never requested or early echo", async () => {
   const h = harness();
   await h.command("on");
-  for (const [value, expected] of [[undefined, "unknown"], [null, "unknown"], ["default", "default"], ["priority", "priority"], ["flex", "flex"], ["\x1b[2J", "unknown"]]) {
+  for (const [value, expected] of [[undefined, "unknown"], [null, "unknown"], ["default", "default"], ["priority", "priority"], ["fast", "fast"], ["flex", "flex"], ["\x1b[2J", "unknown"]]) {
     h.request();
     h.response({ type: "response.created", response: { service_tier: "priority" } });
     assert.match(h.status(), /confirmed: unknown/);
@@ -132,6 +132,33 @@ test("request retry, model change and errors cannot retain stale priority confir
   assert.match(h.status(), /none yet/);
 });
 
+test("live regression: requested priority / returned default warns, rather than claiming fast is on", async () => {
+  const h = harness();
+  await h.command("on");
+  assert.match(h.status(), /Fast request on/);
+  for (const value of ["default", undefined, "flex"]) {
+    h.request();
+    const count = h.notices.length;
+    h.response({ type: "response.created", response: { service_tier: "auto" } });
+    assert.equal(h.notices.length, count);
+    h.response({ type: "response.completed", response: { service_tier: value } });
+    assert.match(h.notices.at(-1), /Fast service not confirmed/);
+    h.response({ type: "response.completed", response: { service_tier: value } });
+    assert.equal(h.notices.length, count + 1);
+  }
+  for (const value of ["priority", "fast"]) {
+    h.request();
+    const count = h.notices.length;
+    h.response({ type: "response.completed", response: { service_tier: value } });
+    assert.equal(h.notices.length, count);
+  }
+  await h.command("off");
+  h.request();
+  const count = h.notices.length;
+  h.response({ type: "response.completed", response: { service_tier: "default" } });
+  assert.equal(h.notices.length, count);
+});
+
 test("headless mode mutates requests without terminal output", async () => {
   const h = harness();
   h.ctx.mode = "json";
@@ -140,5 +167,5 @@ test("headless mode mutates requests without terminal output", async () => {
   await h.command("on");
   await h.command("status");
   assert.equal(h.request().service_tier, "priority");
-  h.response({ type: "response.completed", response: { service_tier: "priority" } });
+  h.response({ type: "response.completed", response: { service_tier: "default" } });
 });

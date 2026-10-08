@@ -22,13 +22,13 @@ Restart Pi, or run `/reload` in an existing session, then:
 Use `/fast off` to stop adding priority to subsequent requests. `/fast` is shorthand for `/fast status`. A running request is not changed by a toggle. The command and footer distinguish your preference, the last request's tier, and provider confirmation:
 
 ```text
-Fast on; last requested: priority; confirmed: unknown
-Fast on; last requested: priority; confirmed: default
-Fast on; last requested: priority; confirmed: priority
+Fast request on; last requested: priority; confirmed: unknown
+Fast request on; last requested: priority; confirmed: default
+Fast request on; last requested: priority; confirmed: priority
 ```
 
 - **Requested** is what this extension put in the request hook (or the pre-existing tier when off), not proof of what the server granted. Later extensions can still alter it.
-- **Confirmed** comes only from `response.completed.response.service_tier`. Early events can echo `auto`; they are not final confirmation.
+- **Confirmed** comes only from `response.completed.response.service_tier`. Early events can echo `auto`; they are not final confirmation. A completed opted-in request with a missing/different tier triggers a warning: **Fast service not confirmed**. Final `priority` or `fast` is tier confirmation, not a measured speed guarantee.
 - **Unknown** means no final tier evidence, including missing/malformed metadata, an in-flight request, or failure/abort. Errors do not silently retry without priority; Pi retains its normal error/retry behavior.
 - Off means this extension does not modify the request. It does not undo a tier set by another extension or provider configuration.
 
@@ -69,7 +69,9 @@ The context model **and** payload model must match. Azure, Codex provider IDs, p
 
 Implementation uses Pi's supported payload replacement hook because ordinary `streamSimple` does not forward a `serviceTier` option. It sets the OpenAI Responses API's `service_tier: "priority"`, and reads parsed response events without logging prompts, bodies, headers, credentials, or errors. See [OpenAI's Responses API reference](https://platform.openai.com/docs/api-reference/responses/create) and [Priority processing](https://platform.openai.com/docs/guides/priority-processing): response tier evidence can differ from the requested tier.
 
-**Bounded live compatibility probe:** on the development account, Pi 1.0.0's `openai/gpt-6-astra` accepted a minimal `Reply OK.` request with `service_tier: "priority"` and completed successfully. Early response events reported `auto`; the completed response reported **`default`**, not priority. This verifies request compatibility on that account, **not a priority grant**. We have not observed server-confirmed Astra priority in a live test. Account/provider policy may differ; this package intentionally exposes the difference instead of promising fast mode was granted. Unit tests cover a priority confirmation synthetically.
+**Live investigation:** the real Pi `/fast on` command path sent `service_tier: "priority"` all the way through HTTP serialization, but the completed response reported **`default`**. Installed Codex 0.160.1 also serializes its `fast` setting as **`priority`**; its “Fast on” UI reflects a preference, not a checked provider grant. Live probes of the native Codex endpoint with existing native authentication, its routing hint, and genuine WebSocket (no fallback) also returned `default`. Literal `fast` was rejected on both subscription routes. Changing the request blindly to `fast` is not a fix.
+
+See [the full diagnosis](docs/diagnosis.md) for reproduction, route/auth/transport comparison, counterfactuals, and limitations, including an opt-in live probe script. **No server-confirmed Astra fast response or speed improvement has been demonstrated.** The evidence does not establish account ineligibility or a client-side request defect; the package now warns when a completed request does not confirm fast service rather than silently presenting an on preference as success.
 
 The request hook exposes no request ID or model argument; scoping uses the current Pi model plus the wire model. This status is for the ordinary sequential Pi agent request stream, not a concurrent nested-call meter. Stream events are additionally filtered by provider/API/model. Extensions that reroute requests or rewrite tiers can invalidate attribution; avoid competing tier/routing extensions. Footer rendering is TUI-only; RPC notifications use Pi's supported UI channel, and JSON/print modes never receive unsolicited stdout logging.
 
@@ -81,6 +83,6 @@ No runtime dependencies or build step. Pi supplies its extension API.
 npm test
 ```
 
-Tests use Node's built-in runner and a fake Pi host. They cover strict scoping, immutable payload replacement, on/off/status, session persistence and save failure, missing/different/priority response tiers, early versus completed events, HTTP/stream/abort errors, retries, and headless behavior. CI runs the same tests; they make no network requests and require no credentials.
+Tests use Node's built-in runner and a fake Pi host. They cover strict scoping, immutable payload replacement, on/off/status, session persistence and save failure, missing/different/priority/fast response tiers, early versus completed events, the live priority-requested/default-returned warning regression, HTTP/stream/abort errors, retries, and headless behavior. CI runs the same tests; they make no network requests and require no credentials.
 
 MIT licensed.
