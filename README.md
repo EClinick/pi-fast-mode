@@ -42,20 +42,13 @@ Your next supported model request will include `service_tier: "priority"`. Insta
 
 Changing the preference does not alter an in-flight request. Off leaves the request untouched: it does not remove a tier chosen by another extension or provider configuration.
 
-### Compact UI and detailed status
+### Quiet UI and detailed status
 
-Pi's shared extension-status row, immediately below the model/effort row, shows a compact badge:
+There is **no persistent fast badge or extra status row**. `/fast`, `/fast on`, and `/fast off` briefly show plain `Fast on` or `Fast off` in Pi's shared status area, then clear it after two seconds. Rapid toggles restart the timeout; switching models, restoring a branch/session, or shutting down clears it immediately. Unsupported selections add `(unsupported)` to this brief confirmation. Resume/reload does not show a confirmation: use `/fast status` to check the saved preference.
 
-```text
-Fast req off
-Fast req on
-Fast req on · ?
-Fast req on · default
-```
+This is a preference acknowledgment, **not confirmation of fast service**. It contains no provider-tier suffix or bold badge. Pi owns the native colors, placement and narrow-width truncation. Other extensions' status keys remain untouched, and a custom footer remains in control of whether it displays shared statuses.
 
-`req on` means **requests enabled**, never server-confirmed acceleration. The suffix is the last provider-reported tier, `?` for unknown evidence, `error` for a failed/aborted request, or `unsupported` when the current model is outside the supported routes. Off hides routine tier evidence, but errors and unsupported selections remain visible. Use `/fast status` for full evidence, including the last request made before a toggle.
-
-The badge uses Pi theme emphasis (bold when enabled) with native terminal colors, so it follows appearance changes without stale cached colors. Pi owns placement and narrow-width truncation alongside other extensions. There is no supported inline model-label slot: this extension does **not** replace the footer or editor, patch Pi, or displace built-in model, effort, usage, or other extension information.
+Pi 1.0.0 and 1.1.0 provide no composable inline model-label slot. Rather than replace the footer, this extension leaves native cwd/git, usage, model and effort information intact. The brief acknowledgment appears in the existing status area, not beside the model; it disappears instead of leaving a permanent extra row. No footer/editor replacement or Pi patching is used.
 
 Detailed diagnostics are shown only when you run `/fast status`:
 
@@ -70,7 +63,7 @@ Fast request on; last requested: priority; confirmed: priority
 - **Confirmed** comes only from the final `response.completed.response.service_tier`. A final `priority` or `fast` confirms that reported tier, not a measured latency improvement. `default` is a reported tier different from the requested priority.
 - **Unknown** means no final tier evidence: the request may be in flight, the field may be missing/malformed, or the request may have failed/been aborted. Early response events that report `auto` do not count as final confirmation.
 
-Routine `default`/unknown results update the badge without per-response warnings. Enabling requests displays one concise cost/availability disclosure; repeated `/fast on` while already enabled does not repeat it. Unsupported models are marked in the badge (and in the enable notice). Errors remain visible through Pi's normal error UI, the badge, and `/fast status`. The extension does not silently retry a failed request without priority; Pi retains its normal error/retry behavior.
+Routine response tiers update only the evidence available through `/fast status`, with no UI updates or per-response warnings. Enabling requests retains one concise cost/availability disclosure in Pi's notification UI; repeated `/fast on` while already enabled does not repeat it. Unsupported models are identified in `/fast status`, the brief confirmation, and the enable notice. Errors remain visible through Pi's normal error UI and `/fast status`. The extension does not silently retry a failed request without priority; Pi retains its normal error/retry behavior.
 
 ### Persistence
 
@@ -148,7 +141,7 @@ See [the investigation report](docs/diagnosis.md) for exact-route reproduction, 
 
 The request hook exposes no request ID or model argument. This extension uses the current model plus the wire model and is intended for ordinary sequential Pi agent requests, not concurrent nested-call accounting. Avoid competing tier/routing extensions that could invalidate attribution.
 
-The footer is TUI-only; supported RPC clients receive command/warning notifications through Pi's UI channel. JSON/print modes receive no unsolicited stdout logging. The extension does not log prompts, request bodies, headers, credentials, or response content.
+The transient confirmation is TUI-only; supported RPC clients receive command/warning notifications through Pi's UI channel. JSON/print modes receive no unsolicited stdout logging. The extension does not log prompts, request bodies, headers, credentials, or response content.
 
 ## Development and contributions
 
@@ -161,15 +154,15 @@ npm test
 git diff --check
 ```
 
-No dependency installation or build step is needed for the tests. They use Node's built-in runner and a fake Pi host; CI runs them on Node.js 22 and 24. Coverage includes provider/endpoint scoping, bare toggles and explicit on/off/status, save failures, branch persistence, compact badges, quiet repeated responses, missing/different/priority/fast tiers, cross-provider isolation, error/abort handling, RPC, and headless behavior.
+No dependency installation or build step is needed for the tests. They use Node's built-in runner and a fake Pi host; CI runs them on Node.js 22 and 24. Coverage includes provider/endpoint scoping, bare toggles and explicit on/off/status, save failures, branch persistence, transient confirmation expiry/cleanup, quiet repeated responses, missing/different/priority/fast tiers, cross-provider isolation, error/abort handling, RPC, and headless behavior.
 
-An optional **offline** integration test loads the extension with installed Pi's real loader and exercises its native footer across dark/light/system themes and 12–120-column widths, including another extension's status. It sends no model requests:
+An optional **offline** integration test loads the extension with installed Pi's real loader and exercises its native footer across dark/light/system themes and 12–120-column widths, including another extension's status, confirmation expiry, and supported/unsupported model switches. It verifies the native footer returns to its original rendering after expiry. It sends no model requests:
 
 ```sh
 PI_TEST_PACKAGE_DIR="$(npm root -g)/@earendil-works/pi-coding-agent" node --test test/pi-rendering.test.js
 ```
 
-Without that environment variable, ordinary tests skip the installed-Pi check.
+Without that environment variable, ordinary tests skip the installed-Pi check. See [UI validation](docs/ui-validation.md) for genuine terminal-capture excerpts at wide/narrow widths and model-switch results.
 
 To load a local checkout without adding a package declaration:
 
