@@ -2,7 +2,38 @@
 
 Investigation on 2026-10-08: Pi 1.0.0 and installed Codex CLI 0.160.1. These are observations, not a claim that an account is ineligible or that a latency improvement was measured.
 
-## Reproduction aligned with the user path
+## Follow-up: exact Pi `openai-codex/gpt-6-astra` route
+
+The active user route was subsequently identified as **Pi provider `openai-codex`, model `gpt-6-astra`**, with existing Pi OAuth credentials available for that provider. This is distinct from the earlier low-level native-endpoint comparison below.
+
+A real Pi SDK agent session loaded the extension and dispatched `/fast on`, a minimal `Reply OK.` prompt, `/fast off`, and the same prompt. The diagnostic observed serialized WebSocket frames immediately before sending, rather than inferring a request from an on preference. No credentials were copied from Codex, no accounts/settings were changed, and no other extensions, tools, project instructions, persistent sessions, retries, or cache warming were loaded.
+
+| Version / preference | Extension supports route | Actual WebSocket tier | Final response tier |
+| --- | --- | --- | --- |
+| Before fix, `/fast on` | No | Omitted | `default` |
+| Before fix, `/fast off` | No | Omitted | `default` |
+| After fix, `/fast on` | Yes | `priority` | `default` |
+| After fix, `/fast off` | Yes | Omitted | `default` |
+
+All four completed successfully. Pi selected real WebSocket with transport `auto`, and the observed endpoint was `wss://chatgpt.com/backend-api/codex/responses`. Early events reported `auto`. The request-hook observations agreed with the serialized frames. Each turn had a 20-second deadline; Codex does not support the direct API's output-token limit, so those turns used the brief prompt without claiming a hard output-token bound.
+
+**Causal boundary:** `/fast on` on the newly identified provider was skipped by the original openai-only allowlist. That is an extension scoping defect, not a provider refusal. The smallest fix adds precisely `openai-codex` + `openai-codex-responses` + `gpt-6-astra` + the official `https://chatgpt.com/backend-api` base URL. Response observations are now tied to the actual request's provider/API so events from the other supported route cannot falsely confirm it. Tests cover Codex on/off, persistence, strict endpoint/API scoping, cross-route stream isolation, missing/different/priority/fast tiers, and errors.
+
+**Concrete result:** the extension now operates correctly on the exact Pi Codex route, but the provider still returns `default` even when the outgoing frame contains `priority`. This fixes the missing request, not a verified speed improvement. The prior provider-confirmation uncertainty remains separate from the now-fixed extension omission.
+
+Reproduce the exact provider/session path explicitly (potentially billable):
+
+```sh
+node scripts/probe.mjs /path/to/installed/@earendil-works/pi-coding-agent openai-codex auto
+```
+
+The optional last argument can be `auto`, `sse`, or `websocket`; the live follow-up above used `auto` and observed actual WebSocket. The script defaults to `openai` if no provider is supplied. Credentials are read through Pi's read-only credential storage, without refresh or credential writes. This follow-up did not repeat the earlier native-auth, alternate-tier, or routing-hint probes.
+
+## Earlier investigation: direct OpenAI route and native comparison
+
+The following records the original direct `openai` path and low-level native comparison, before the exact Pi Codex user route was identified. Its finding of correct request delivery applies to that original path; it did **not** establish that the then-openai-only extension handled Pi's `openai-codex` provider.
+
+### Reproduction aligned with the original user path
 
 The package was loaded into a real Pi SDK agent session, using its actual extension runner, command dispatch, model runtime, and provider implementation. `/fast on` followed by `Reply OK.` sent `service_tier: "priority"` in the **serialized HTTP body** to `https://api.openai.com/v1/responses`. The completed response reported `default`. `/fast off` followed by the same prompt omitted the tier and also completed with `default`.
 
@@ -72,4 +103,4 @@ These observations disconfirm the simple hypotheses “Codex sends literal fast,
 
 The package now labels the preference **“Fast request on”** and warns once per completed opted-in request when the final tier is absent or differs from `priority`/`fast`. The live `priority → default` case is a regression test; final `fast` and `priority` both count as provider confirmation. No speculative auth routing, credential copying, forced fallback, or unrelated model support was added.
 
-**Unresolved outcome:** a server-confirmed Astra fast response has still not been observed. There is no justified request-value fix from the evidence above. This is a concrete provider-reporting limitation on the tested routes, not proof of an account restriction or a claim that real fast service is impossible. Establishing why the provider returns `default` requires authoritative provider evidence or a genuinely confirmed fast response to compare. Do not describe this diagnosis or the warning fix as delivering a verified speed improvement.
+**Unresolved provider outcome:** a server-confirmed Astra fast response has still not been observed. There is no justified request-value substitution from the evidence above; the subsequent Codex provider-scoping fix is documented separately at the top of this report. This is a concrete provider-reporting limitation on the tested routes, not proof of an account restriction or a claim that real fast service is impossible. Establishing why the provider returns `default` requires authoritative provider evidence or a genuinely confirmed fast response to compare. Do not describe this diagnosis or the warning fix as delivering a verified speed improvement.

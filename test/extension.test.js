@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import fastMode, { supported } from "../src/extension.js";
 
 const model = { provider: "openai", id: "gpt-6-astra", api: "openai-responses", baseUrl: "https://api.openai.com/v1" };
+const codexModel = { provider: "openai-codex", id: "gpt-6-astra", api: "openai-codex-responses", baseUrl: "https://chatgpt.com/backend-api" };
 const payload = { model: model.id, input: [{ role: "user", content: "hello" }] };
 function harness(branch = [], options = {}) {
+  const selectedModel = options.model ?? model;
   const handlers = new Map();
   let command, display = "";
   const notices = [];
@@ -17,7 +19,7 @@ function harness(branch = [], options = {}) {
     },
   };
   const ctx = {
-    model: { ...model }, mode: "tui", hasUI: true,
+    model: { ...selectedModel }, mode: "tui", hasUI: true,
     sessionManager: { getBranch: () => branch },
     ui: { setStatus: (_key, value) => { display = value; }, notify: (value) => notices.push(value) },
   };
@@ -26,7 +28,7 @@ function harness(branch = [], options = {}) {
   emit("session_start");
   return { ctx, branch, notices, emit, command: (args) => command(args, ctx), status: () => display,
     request: (body = payload) => emit("before_provider_request", { payload: body }),
-    response: (data, extra = {}) => emit("provider_stream_event", { provider: model.provider, api: model.api, model: model.id, data, ...extra }),
+    response: (data, extra = {}) => emit("provider_stream_event", { provider: selectedModel.provider, api: selectedModel.api, model: selectedModel.id, data, ...extra }),
   };
 }
 
@@ -56,6 +58,53 @@ test("strict provider, model, API, endpoint and payload scoping", async () => {
   h.ctx.model = model;
   for (const body of [null, [], "text", {}, { ...payload, model: "other" }]) assert.equal(h.request(body), undefined);
   assert.equal(supported({ ...model, baseUrl: model.baseUrl + "/" }), true);
+});
+
+test("Codex route regression: on requests priority; off preserves payload; preference resumes", async () => {
+  const h = harness([], { model: codexModel });
+  assert.equal(supported(codexModel), true);
+  assert.doesNotMatch(h.status(), /unsupported/);
+  assert.equal(h.request(), undefined);
+  await h.command("on");
+  assert.deepEqual(h.request(), { ...payload, service_tier: "priority" });
+  assert.equal(payload.service_tier, undefined);
+  assert.equal(harness(h.branch, { model: codexModel }).request().service_tier, "priority");
+  await h.command("off");
+  assert.equal(h.request(), undefined);
+  assert.equal(h.request({ ...payload, service_tier: "flex" }), undefined);
+});
+
+test("Codex scope excludes cross-wired APIs, unrelated models, proxies and lookalike endpoints", async () => {
+  const h = harness([], { model: codexModel });
+  await h.command("on");
+  assert.equal(supported({ ...codexModel, baseUrl: codexModel.baseUrl + "/" }), true);
+  for (const override of [{ provider: "openai" }, { api: "openai-responses" }, { id: "gpt-5.3-codex" },
+    { baseUrl: "https://api.openai.com/v1" }, { baseUrl: "https://chatgpt.com.evil/backend-api" },
+    { baseUrl: "http://chatgpt.com/backend-api" }, { baseUrl: "https://proxy.example/backend-api" }]) {
+    h.ctx.model = { ...codexModel, ...override };
+    assert.equal(supported(h.ctx.model), false);
+    assert.equal(h.request(), undefined);
+  }
+});
+
+test("responses are bound to the originating route, with Codex absent/different/priority/error handling", async () => {
+  for (const selectedModel of [model, codexModel]) {
+    const h = harness([], { model: selectedModel });
+    const other = selectedModel === model ? codexModel : model;
+    await h.command("on");
+    h.request();
+    h.response({ type: "response.completed", response: { service_tier: "priority" } }, { provider: other.provider, api: other.api });
+    assert.match(h.status(), /confirmed: unknown/);
+    h.response({ type: "response.completed", response: { service_tier: "priority" } }, { api: other.api });
+    assert.match(h.status(), /confirmed: unknown/);
+    for (const value of [undefined, "default", "priority", "fast"]) {
+      h.request();
+      h.response({ type: "response.completed", response: { service_tier: value } });
+      assert.match(h.status(), new RegExp(`confirmed: ${value ?? "unknown"}`));
+    }
+    h.emit("message_end", { message: { role: "assistant", stopReason: "error" } });
+    assert.match(h.status(), /confirmed: unknown.*failed/);
+  }
 });
 
 test("preference persists on resume/reload, honors branch, and new sessions default off", async () => {

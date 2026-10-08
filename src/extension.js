@@ -5,9 +5,11 @@ const record = (value) => value !== null && typeof value === "object" && !Array.
 const tier = (value) => typeof value === "string" && /^[a-z_]{1,32}$/.test(value) ? value : "unknown";
 
 export function supported(model) {
-  return model?.provider === "openai" && model.id === MODEL &&
-    model.api === "openai-responses" &&
-    /^https:\/\/api\.openai\.com\/v1\/?$/.test(model.baseUrl ?? "");
+  if (model?.id !== MODEL) return false;
+  return (model.provider === "openai" && model.api === "openai-responses" &&
+    /^https:\/\/api\.openai\.com\/v1\/?$/.test(model.baseUrl ?? "")) ||
+    (model.provider === "openai-codex" && model.api === "openai-codex-responses" &&
+    /^https:\/\/chatgpt\.com\/backend-api\/?$/.test(model.baseUrl ?? ""));
 }
 
 /** @param {import('@earendil-works/pi-coding-agent').ExtensionAPI} pi */
@@ -63,14 +65,15 @@ export default function fastMode(pi) {
     }
     last = { requested: enabled ? "priority" :
       (event.payload.service_tier === undefined ? "unspecified" : tier(event.payload.service_tier)),
-      confirmed: "unknown", error: false, warnIfUnconfirmed: enabled, warned: false };
+      confirmed: "unknown", error: false, warnIfUnconfirmed: enabled, warned: false,
+      provider: ctx.model.provider, api: ctx.model.api };
     render(ctx);
     if (enabled) return { ...event.payload, service_tier: "priority" };
     // Off does not remove another extension's/provider's tier choice.
   });
 
   pi.on("provider_stream_event", (event, ctx) => {
-    if (!last || event.provider !== "openai" || event.api !== "openai-responses" || event.model !== MODEL) return;
+    if (!last || event.provider !== last.provider || event.api !== last.api || event.model !== MODEL) return;
     const data = event.data;
     if (!record(data)) return;
     // response.created/in_progress often echo 'auto', not the tier actually used.

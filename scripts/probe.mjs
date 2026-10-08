@@ -1,6 +1,7 @@
 // Explicit, opt-in live diagnostic. Never run from CI: requests can incur charges.
-// Usage: node scripts/probe.mjs /path/to/installed/@earendil-works/pi-coding-agent
+// Usage: node scripts/probe.mjs /path/to/installed/@earendil-works/pi-coding-agent [openai|openai-codex] [auto|sse|websocket]
 import { resolve, join } from "node:path";
+import * as zlib from "node:zlib";
 import { pathToFileURL } from "node:url";
 import fastMode, { supported } from "../src/extension.js";
 
@@ -13,20 +14,44 @@ const { ReadOnlyAuthStorage } = await load("dist/core/auth-storage.js");
 const { loadExtensionFromFactory } = await load("dist/core/extensions/loader.js");
 const { createEventBus } = await load("dist/core/event-bus.js");
 const modelRuntime = await ModelRuntime.create({ credentials: new ReadOnlyAuthStorage(), allowModelNetwork: false });
-const model = modelRuntime.getModel("openai", "gpt-6-astra");
-if (!supported(model)) throw new Error("Supported official Astra route not present in the installed catalog.");
+const provider = process.argv[3] ?? "openai";
+const transport = process.argv[4] ?? "auto";
+if (!["openai", "openai-codex"].includes(provider) || !["auto", "sse", "websocket"].includes(transport)) {
+  throw new Error("Use provider openai|openai-codex and transport auto|sse|websocket.");
+}
+const model = modelRuntime.getModel(provider, "gpt-6-astra");
+const expectedRoute = provider === "openai" ? ["openai-responses", "https://api.openai.com/v1"] :
+  ["openai-codex-responses", "https://chatgpt.com/backend-api"];
+if (!model || model.api !== expectedRoute[0] || model.baseUrl.replace(/\/$/, "") !== expectedRoute[1]) {
+  throw new Error("Official Astra route not present in the installed catalog.");
+}
 const runtime = createExtensionRuntime();
 const bus = createEventBus();
 const evidence = [];
+// Observe serialized WebSocket metadata, not credentials or prompts. Process-local only.
+const OriginalWebSocket = globalThis.WebSocket;
+if (provider === "openai-codex" && OriginalWebSocket) {
+  globalThis.WebSocket = class extends OriginalWebSocket {
+    constructor(url, options) { super(url, options); this.probeUrl = new URL(url); }
+    send(data) {
+      const body = JSON.parse(data);
+      evidence.push({ phase: "wire", transport: "websocket",
+        endpoint: this.probeUrl.origin + this.probeUrl.pathname,
+        model: body.model, requested: body.service_tier ?? "omitted" });
+      return super.send(data);
+    }
+  };
+}
 // Observe serialized request metadata at the HTTP boundary, not just the payload hook.
 const streamSimple = modelRuntime.streamSimple.bind(modelRuntime);
 modelRuntime.streamSimple = (requestModel, context, options) => streamSimple(requestModel, context, {
   ...options,
   fetch: async (input, init) => {
     const request = new Request(input, init);
-    const body = await request.clone().json();
+    const bytes = Buffer.from(await request.clone().arrayBuffer());
+    const body = JSON.parse((request.headers.get("content-encoding") === "zstd" ? zlib.zstdDecompressSync(bytes) : bytes).toString());
     const url = new URL(request.url);
-    evidence.push({ phase: "wire", endpoint: url.origin + url.pathname,
+    evidence.push({ phase: "wire", transport: "sse", endpoint: url.origin + url.pathname,
       model: body.model, requested: body.service_tier ?? "omitted", stream: body.stream });
     return fetch(request);
   },
@@ -37,7 +62,8 @@ const extensions = [
     pi.on("before_provider_request", (event) => {
       const p = event.payload;
       evidence.push({ phase: "request", model: p.model, requested: p.service_tier ?? "omitted" });
-      return { ...p, max_output_tokens: 16 };
+      // Codex subscription requests do not support max_output_tokens.
+      if (provider === "openai") return { ...p, max_output_tokens: 16 };
     });
     pi.on("provider_stream_event", (event) => {
       if (["response.created", "response.completed"].includes(event.data?.type)) {
@@ -57,7 +83,7 @@ const resourceLoader = {
   extendResources() {}, async reload() {},
 };
 const settingsManager = SettingsManager.inMemory({
-  compaction: { enabled: false }, cacheWarming: "off",
+  compaction: { enabled: false }, cacheWarming: "off", transport,
   retry: { enabled: false, provider: { maxRetries: 0, timeoutMs: 20000 } },
 });
 const { session } = await createAgentSession({
@@ -72,7 +98,8 @@ try {
     try { await session.prompt("Reply OK."); } finally { clearTimeout(timer); }
     evidence.push({ phase: "result", preference: action, stopReason: session.messages.at(-1)?.stopReason });
   }
-  console.log(JSON.stringify({ provider: model.provider, api: model.api, evidence }, null, 2));
+  console.log(JSON.stringify({ provider: model.provider, api: model.api, extensionSupported: supported(model), transport, evidence }, null, 2));
 } finally {
   session.dispose();
+  globalThis.WebSocket = OriginalWebSocket;
 }
